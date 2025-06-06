@@ -2,3 +2,5 @@ config.json
 postman-test.py
 logs/
 prompt.txt
+__pycache__
+response.txt

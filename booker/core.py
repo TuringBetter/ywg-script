@@ -64,11 +64,21 @@ class GymBooker:
             self.logger.error(f"请求或解析失败 for {field_name}: {e}")
         return False, "retry"
 
-    def daily_booking_task(self):
+    def daily_booking_task(self, start_time: datetime = None):
+        """
+        每日执行的抢票任务单元。
+        :param start_time: 用于测试的可选参数，如果提供，则基于此时间进行判断。
+        """
         self.logger.info("="*50)
-        self.logger.info(f"触发每日抢票任务 @ {datetime.now()}")
+
+        # 如果没有提供测试时间，就使用当前真实时间
+        now = start_time or datetime.now()
+
+        self.logger.info(f"触发每日抢票任务 @ {now.strftime('%Y-%m-%d %H:%M:%S')}")
         self._refresh_state()
-        booking_end_time = datetime.now().replace(hour=12, minute=self.booking_window_minutes, second=0, microsecond=0)
+
+        # 基于 now 来计算结束时间
+        booking_end_time = now + timedelta(minutes=10)
         skipped_fields = set()
 
         while datetime.now() < booking_end_time:
@@ -83,6 +93,9 @@ class GymBooker:
                 if success:
                     self.logger.info("今日抢票成功，任务结束。")
                     return
+                if status == "cookie_expired":
+                    self.logger.error("Cookie已失效，任务终止")
+                    return
                 if status == "skip": skipped_fields.add(field_no)
                 elif status == "slow": time.sleep(3)
                 else: time.sleep(0.5)
@@ -90,6 +103,8 @@ class GymBooker:
 
     def run(self):
         self.logger.info(f"调度器已启动。任务将在每天 {self.booking_time_str} 执行。")
+        # schedule 调用时，会无参数地调用 self.daily_booking_task
+        # 这样 start_time 就会是 None，函数会使用 datetime.now()
         schedule.every().day.at(self.booking_time_str).do(self.daily_booking_task)
         while True:
             schedule.run_pending()
