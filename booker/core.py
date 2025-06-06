@@ -50,6 +50,24 @@ class GymBooker:
         try:
             response = self.session.get(url, timeout=5)
             self.logger.info(f"尝试 {field_name} - 状态码: {response.status_code}")
+            
+            # 检查是否是登录页面
+            try:
+                # 尝试将响应内容解码为UTF-8
+                decoded_text = response.content.decode('utf-8')
+                if "用户类型选择" in decoded_text or "体育场馆预订系统" in decoded_text:
+                    self.logger.error("Cookie已失效，需要重新登录")
+                    return False, "cookie_expired"
+            except UnicodeDecodeError:
+                # 如果解码失败，尝试使用其他编码
+                try:
+                    decoded_text = response.content.decode('gbk')
+                    if "用户类型选择" in decoded_text or "体育场馆预订系统" in decoded_text:
+                        self.logger.error("Cookie已失效，需要重新登录")
+                        return False, "cookie_expired"
+                except UnicodeDecodeError:
+                    self.logger.error("无法解码响应内容")
+                
             if response.status_code == 200:
                 result = response.json()
                 message = result.get('message', '未知错误')
@@ -78,7 +96,7 @@ class GymBooker:
         self._refresh_state()
 
         # 基于 now 来计算结束时间
-        booking_end_time = now + timedelta(minutes=10)
+        booking_end_time = now + timedelta(minutes=self.booking_window_minutes)
         skipped_fields = set()
 
         while datetime.now() < booking_end_time:
