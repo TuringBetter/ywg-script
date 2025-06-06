@@ -40,6 +40,19 @@ def create_checkdata(field_no, field_name, begin_time, end_time):
         "Price": "2.00"
     }]
 
+def get_field_info(field_no):
+    """根据场地编号获取场地名称"""
+    field_num = int(field_no[3:])
+    return f"健身房{field_num:02d}"
+
+def should_skip_field(message):
+    """判断是否应该跳过该场地"""
+    return "已被其他人抢跑" in message
+
+def should_slow_down(message):
+    """判断是否需要降低抢票速度"""
+    return "下单速度过快" in message
+
 def book_field(field_no, field_name, begin_time, end_time, dateadd=2, venue_no="01"):
     config = load_config()
     
@@ -64,49 +77,110 @@ def book_field(field_no, field_name, begin_time, end_time, dateadd=2, venue_no="
             try:
                 result = response.json()
                 if result.get('type') == 1:
-                    logger.info("抢票成功！")
-                    return True
+                    logger.info(f"抢票成功！场地：{field_name}")
+                    return True, None
                 else:
-                    logger.warning(f"抢票失败: {result.get('message', '未知错误')}")
-                    return False
+                    message = result.get('message', '未知错误')
+                    logger.warning(f"抢票失败: {message}")
+                    
+                    if should_skip_field(message):
+                        return False, "skip"
+                    elif should_slow_down(message):
+                        return False, "slow"
+                    else:
+                        return False, "retry"
             except json.JSONDecodeError:
                 logger.error("响应解析失败")
-                return False
-        return False
+                return False, "retry"
+        return False, "retry"
     except Exception as e:
         logger.error(f"发生错误: {str(e)}")
-        return False
+        return False, "retry"
 
 def main():
-    field_no = "JSP014"
-    field_name = "健身房14"
     begin_time = "09:00"
     end_time = "12:00"
     
     logger.info("开始抢票程序...")
     while True:
         current_time = datetime.now()
+        
         # 检查是否到达中午12点且未超过12:10
         if current_time.hour == 12 and 0 <= current_time.minute <= 10:
             logger.info("开始尝试抢票...")
-            success = book_field(field_no, field_name, begin_time, end_time)
-            if success:
-                logger.info("今日抢票成功，等待明天继续...")
-                # 等待到明天
-                time.sleep(23 * 60 * 60 + 40 * 60)
-            else:
-                logger.info("抢票失败，继续尝试...")
-                time.sleep(0.5)  # 失败后等待0.5秒再试
-        elif current_time.hour == 12 and current_time.minute > 10:
-            logger.info("已超过12:10，今日抢票结束，等待明天...")
+            
+            # 重新加载cookie
+            try:
+                load_config()
+                logger.info("成功重新加载cookie")
+            except Exception as e:
+                logger.error(f"重新加载cookie失败: {str(e)}")
+                time.sleep(60)
+                continue
+            
+            # 记录已尝试过的场地
+            tried_fields = set()
+            # 记录需要跳过的场地
+            skipped_fields = set()
+            
+            while current_time.hour == 12 and current_time.minute <= 10:
+                # 遍历所有场地
+                for field_num in range(1, 31):
+                    field_no = f"JSP{field_num:03d}"
+                    field_name = get_field_info(field_no)
+                    
+                    # 如果场地已被跳过，则继续下一个
+                    if field_no in skipped_fields:
+                        continue
+                    
+                    # 如果场地已经尝试过且不需要重试，则继续下一个
+                    if field_no in tried_fields:
+                        continue
+                    
+                    logger.info(f"尝试抢票场地: {field_name}")
+                    success, status = book_field(field_no, field_name, begin_time, end_time)
+                    
+                    if success:
+                        logger.info("今日抢票成功，等待明天继续...")
+                        # 等待到明天
+                        time.sleep(23 * 60 * 60 + 40 * 60)
+                        break
+                    
+                    if status == "skip":
+                        skipped_fields.add(field_no)
+                        logger.info(f"场地 {field_name} 已被抢完，跳过")
+                    elif status == "slow":
+                        logger.info("抢票速度过快，等待2秒...")
+                        time.sleep(2)
+                    else:
+                        tried_fields.add(field_no)
+                        time.sleep(0.5)
+                    
+                    # 更新当前时间
+                    current_time = datetime.now()
+                    
+                    # 检查是否超过12:10
+                    if current_time.hour == 12 and current_time.minute > 10:
+                        logger.info("已超过12:10，今日抢票结束")
+                        break
+                
+                # 如果所有场地都被跳过，则结束今日抢票
+                if len(skipped_fields) == 30:
+                    logger.info("所有场地都已被抢完，结束今日抢票")
+                    break
+                
+                # 更新当前时间
+                current_time = datetime.now()
+            
             # 计算到明天12点的时间
             tomorrow = current_time.replace(hour=12, minute=0, second=0, microsecond=0)
             tomorrow = tomorrow.replace(day=tomorrow.day + 1)
             wait_seconds = (tomorrow - current_time).total_seconds()
+            logger.info(f"等待到明天12点，剩余时间: {wait_seconds/3600:.2f}小时")
             time.sleep(wait_seconds)
         else:
             # 如果还没到12点，每分钟检查一次
-            time.sleep(10)
+            time.sleep(60)
 
 if __name__ == "__main__":
     main() 
