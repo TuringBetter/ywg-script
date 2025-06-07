@@ -145,10 +145,8 @@ class GymBooker:
         self.logger.info("抢票时间窗口已过，今日任务结束。")
 
     def run(self):
-        self.logger.info(f"调度器已启动。任务将在每天 {self.booking_time_str} 执行。")
-        # schedule 调用时，会无参数地调用 self.daily_booking_task
-        # 这样 start_time 就会是 None，函数会使用 datetime.now()
-        schedule.every().day.at(self.booking_time_str).do(self.daily_booking_task)
+        self.logger.info(f"调度器已启动。任务将在每天 {self.schedule_time} 执行。")
+        schedule.every().day.at(self.schedule_time).do(self.daily_booking_task)
         while True:
             schedule.run_pending()
             time.sleep(1)
