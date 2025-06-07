@@ -21,16 +21,35 @@ class GymBooker:
     def __init__(self, config_path: str, logger: logging.Logger):
         self.config_path = config_path
         self.logger = logger
-        self.config = load_app_config(self.config_path)
         self.session = requests.Session()
         
-        # 定义业务参数
-        self.begin_time = "09:00"
-        self.end_time = "12:00"
-        self.booking_time_str = "12:00"
-        self.booking_window_minutes = 10
-        self.total_fields = 30
+        # 初始化时，调用一次加载逻辑
+        self._reload_params()
     
+    def _reload_params(self):
+        """从文件重新加载所有业务参数到实例属性中。"""
+        self.logger.info("正在从 config.json 重新加载业务参数...")
+        
+        # 重新读取整个配置文件
+        self.config = load_app_config(self.config_path)
+        
+        # 更新 session 中的 cookie
+        self.session.headers.update({'Cookie': self.config.get('cookie', '')})
+        
+        # 重新加载业务参数
+        params = self.config.get('booking_params', {})
+        self.begin_time = params.get('begin_time', '09:00')
+        self.end_time = params.get('end_time', '12:00')
+        self.schedule_time = params.get('schedule_time', '12:00')
+        self.window_minutes = params.get('window_minutes', 10)
+        self.total_fields = params.get('total_fields', 30)
+
+        self.logger.info("业务参数加载完成:")
+        self.logger.info(f"  - 预定时间段: {self.begin_time} - {self.end_time}")
+        self.logger.info(f"  - 每日执行时间: {self.schedule_time}")
+        self.logger.info(f"  - 抢票窗口: {self.window_minutes} 分钟")
+        self.logger.info(f"  - 场地总数: {self.total_fields}")
+
     def _refresh_state(self):
         """从文件重新加载配置和Cookie。"""
         self.logger.info("刷新配置和Cookie...")
@@ -87,6 +106,9 @@ class GymBooker:
         每日执行的抢票任务单元。
         :param start_time: 用于测试的可选参数，如果提供，则基于此时间进行判断。
         """
+
+        self._reload_params()
+
         self.logger.info("="*50)
 
         # 如果没有提供测试时间，就使用当前真实时间
