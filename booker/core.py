@@ -66,19 +66,18 @@ class GymBooker:
     def _book_single_field(self, field_no, field_name):
         checkdata_str = urllib.parse.quote(json.dumps(self._create_checkdata(field_no, field_name)))
         url = f"{self.BASE_URL}?checkdata={checkdata_str}&dateadd=2&VenueNo=01"
+        
         try:
             response = self.session.get(url, timeout=5)
             self.logger.info(f"尝试 {field_name} - 状态码: {response.status_code}")
             
-            # 检查是否是登录页面
+            # 检查登录状态
             try:
-                # 尝试将响应内容解码为UTF-8
                 decoded_text = response.content.decode('utf-8')
                 if "用户类型选择" in decoded_text or "体育场馆预订系统" in decoded_text:
                     self.logger.error("Cookie已失效，需要重新登录")
                     return False, "cookie_expired"
             except UnicodeDecodeError:
-                # 如果解码失败，尝试使用其他编码
                 try:
                     decoded_text = response.content.decode('gbk')
                     if "用户类型选择" in decoded_text or "体育场馆预订系统" in decoded_text:
@@ -86,7 +85,8 @@ class GymBooker:
                         return False, "cookie_expired"
                 except UnicodeDecodeError:
                     self.logger.error("无法解码响应内容")
-                
+                    return False, "decode_error"
+            
             if response.status_code == 200:
                 result = response.json()
                 message = result.get('message', '未知错误')
@@ -97,8 +97,11 @@ class GymBooker:
                 if "已被其他人抢跑" in message: return False, "skip"
                 if "下单速度过快" in message: return False, "slow"
                 return False, "retry"
+            
         except (requests.RequestException, json.JSONDecodeError) as e:
             self.logger.error(f"请求或解析失败 for {field_name}: {e}")
+            return False, "request_error"
+        
         return False, "retry"
 
     def daily_booking_task(self, start_time: datetime = None):
@@ -118,7 +121,7 @@ class GymBooker:
         self._refresh_state()
 
         # 基于 now 来计算结束时间
-        booking_end_time = now + timedelta(minutes=self.booking_window_minutes)
+        booking_end_time = now + timedelta(minutes=self.window_minutes)
         skipped_fields = set()
 
         while datetime.now() < booking_end_time:
