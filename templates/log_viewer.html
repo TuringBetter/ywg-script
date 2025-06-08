@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>日志查看器 - {{ filename }}</title>
+    <style>
+        body { font-family: sans-serif; background-color: #1e1e1e; color: #d4d4d4; margin: 0; padding: 20px; }
+        h1, h2 { color: #569cd6; }
+        a { color: #ce9178; }
+        #log-container { border: 1px solid #333; border-radius: 5px; background-color: #121212; padding: 15px; margin-top: 15px; }
+        pre { white-space: pre-wrap; word-wrap: break-word; font-family: 'Courier New', Courier, monospace; font-size: 14px; margin: 0; }
+        .controls { margin-bottom: 15px; }
+        button { background-color: #0e639c; color: white; border: none; padding: 8px 15px; border-radius: 3px; cursor: pointer; }
+        button:hover { background-color: #1177bb; }
+        #status { margin-left: 15px; font-style: italic; color: #888; }
+    </style>
+</head>
+<body>
+    <h1>日志查看器</h1>
+    <h2>正在查看: {{ filename }}</h2>
+    <a href="/logs?token={{ token }}">返回日志列表</a>
+
+    <div class="controls">
+        <button id="refresh-btn">手动刷新</button>
+        <button id="toggle-auto-refresh-btn">启动自动刷新</button>
+        <span id="status">自动刷新已停止</span>
+    </div>
+
+    <div id="log-container">
+        <pre id="log-content">{{ log_content }}</pre>
+    </div>
+
+    <script>
+        const filename = "{{ filename }}";
+        const token = "{{ token }}";
+        const logContentElement = document.getElementById('log-content');
+        const refreshBtn = document.getElementById('refresh-btn');
+        const toggleBtn = document.getElementById('toggle-auto-refresh-btn');
+        const statusElement = document.getElementById('status');
+        
+        let autoRefreshInterval = null;
+
+        async function fetchLogContent() {
+            try {
+                const response = await fetch(`/api/logs/${filename}?token=${token}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const text = await response.text();
+                logContentElement.textContent = text;
+                // 自动滚动到底部
+                logContentElement.scrollTop = logContentElement.scrollHeight;
+            } catch (error) {
+                console.error("获取日志失败:", error);
+                logContentElement.textContent = "获取日志内容失败，请检查服务器状态和网络连接。";
+                stopAutoRefresh();
+            }
+        }
+
+        function startAutoRefresh() {
+            if (!autoRefreshInterval) {
+                fetchLogContent(); // 立即执行一次
+                autoRefreshInterval = setInterval(fetchLogContent, 5000); // 每5秒刷新一次
+                toggleBtn.textContent = '停止自动刷新';
+                statusElement.textContent = '每5秒自动刷新...';
+            }
+        }
+
+        function stopAutoRefresh() {
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
+                toggleBtn.textContent = '启动自动刷新';
+                statusElement.textContent = '自动刷新已停止';
+            }
+        }
+
+        refreshBtn.addEventListener('click', fetchLogContent);
+        
+        toggleBtn.addEventListener('click', () => {
+            if (autoRefreshInterval) {
+                stopAutoRefresh();
+            } else {
+                startAutoRefresh();
+            }
+        });
+    </script>
+</body>
+</html>
