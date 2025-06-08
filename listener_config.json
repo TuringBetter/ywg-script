@@ -1,0 +1,17 @@
+{
+    "SERVER_SETTINGS": {
+      "HOST": "0.0.0.0",
+      "PORT": 5000
+    },
+    "SECURITY": {
+      "SECRET_TOKEN": "YourSuperSecretTokenGoesHere_ChangeMe"
+    },
+    "LOG_VIEWER": {
+      "LOG_DIR": "logs",
+      "ALLOWED_LOG_FILES": [
+        "gym_booking.log",
+        "cookie_listener.log"
+      ],
+      "LINES_TO_SHOW": 50
+    }
+  }

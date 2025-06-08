@@ -1,127 +1,156 @@
-# cookie_listener.py (v2 with Log Viewer)
+# cookie_listener.py (v3 with Hot-Reloadable External Config)
 
 import json
 import logging
 import os
-from flask import Flask, request, jsonify, render_template, abort, Response
+import time
+from flask import Flask, request, jsonify, render_template, abort, Response, g
 from collections import deque
 
-# --- 配置区 ---
-CONFIG_FILE_PATH = 'config.json'
-SECRET_TOKEN = "YourSuperSecretTokenGoesHere_ChangeMe" # 确保这个令牌足够安全
-LOG_DIR = 'logs' # 日志文件所在的目录
-ALLOWED_LOG_FILES = ['gym_booking.log', 'cookie_listener.log'] # 允许通过Web访问的日志文件名列表
-LINES_TO_SHOW = 500 # 默认显示日志的最后500行
+# --- 配置管理器 ---
+
+class ConfigManager:
+    """一个简单的配置管理器，支持从JSON文件热加载。"""
+    def __init__(self, config_path):
+        self.config_path = config_path
+        self._config = {}
+        self._last_mtime = 0
+        self._load_config()
+
+    def _load_config(self):
+        """加载或重新加载配置文件。"""
+        try:
+            with open(self.config_path, 'r', encoding='utf-8') as f:
+                self._config = json.load(f)
+            self._last_mtime = os.path.getmtime(self.config_path)
+            logging.info(f"配置 '{self.config_path}' 已成功加载/重新加载。")
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            logging.error(f"无法加载配置文件 '{self.config_path}': {e}")
+            # 在无法加载时提供一个最小化的默认配置，以防服务完全崩溃
+            self._config = {
+                "SECURITY": {"SECRET_TOKEN": "default_fallback_token"},
+                "LOG_VIEWER": {"ALLOWED_LOG_FILES": []}
+            }
+            
+    def check_and_reload(self):
+        """检查文件修改时间，如果文件已更新则重新加载。"""
+        try:
+            current_mtime = os.path.getmtime(self.config_path)
+            if current_mtime > self._last_mtime:
+                logging.info("检测到配置文件已更改，将执行热重载。")
+                self._load_config()
+        except FileNotFoundError:
+            logging.warning("配置文件未找到，无法检查更新。")
+
+    def get(self, section, key, default=None):
+        """安全地获取配置项。"""
+        return self._config.get(section, {}).get(key, default)
 
 # --- 初始化 ---
+
+LISTENER_CONFIG_PATH = 'listener_config.json'
+BOOKING_CONFIG_PATH = 'config.json'
+
 app = Flask(__name__)
+config_manager = ConfigManager(LISTENER_CONFIG_PATH)
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-# 如果你想让这个监听服务也记录到文件，可以取消下面这行注释
-# logging.getLogger().addHandler(logging.FileHandler(os.path.join(LOG_DIR, 'cookie_listener.log')))
+# 可选：让服务自身也记录到文件
+# log_dir = config_manager.get("LOG_VIEWER", "LOG_DIR", "logs")
+# if not os.path.exists(log_dir): os.makedirs(log_dir)
+# logging.getLogger().addHandler(logging.FileHandler(os.path.join(log_dir, 'cookie_listener.log')))
+
+
+@app.before_request
+def before_request_hook():
+    """在每个请求处理之前，检查并重新加载配置。"""
+    config_manager.check_and_reload()
+    # 将当前配置值存入Flask的全局对象g，方便在单次请求中重复使用
+    g.SECRET_TOKEN = config_manager.get("SECURITY", "SECRET_TOKEN")
+    g.ALLOWED_LOG_FILES = config_manager.get("LOG_VIEWER", "ALLOWED_LOG_FILES", [])
+    g.LOG_DIR = config_manager.get("LOG_VIEWER", "LOG_DIR", "logs")
+    g.LINES_TO_SHOW = config_manager.get("LOG_VIEWER", "LINES_TO_SHOW", 500)
 
 # --- 辅助函数 ---
 def read_log_file(filename):
     """高效地读取日志文件的最后N行。"""
-    filepath = os.path.join(LOG_DIR, filename)
+    filepath = os.path.join(g.LOG_DIR, filename)
     if not os.path.exists(filepath):
         return f"错误：日志文件 '{filepath}' 不存在。"
     try:
         with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-            # 使用deque可以高效地获取文件的末尾行
-            last_lines = deque(f, LINES_TO_SHOW)
+            last_lines = deque(f, g.LINES_TO_SHOW)
             return "".join(last_lines)
     except Exception as e:
         return f"读取文件时发生错误: {e}"
 
-# --- 主API路由 ---
+# --- 路由 ---
+
 @app.route('/update-cookie', methods=['POST'])
 def update_cookie():
-    """
-    监听POST请求，用于更新config.json中的cookie。
-    """
-    # 1. 安全验证：检查请求头中是否包含正确的令牌
     auth_token = request.headers.get('X-Auth-Token')
-    if auth_token != SECRET_TOKEN:
-        logging.warning(f"接收到未授权的请求，IP: {request.remote_addr}")
-        return jsonify({"status": "error", "message": "Forbidden"}), 403
-
-    # 2. 获取数据：从请求的JSON体中获取cookie
-    try:
-        data = request.get_json()
-        new_cookie = data['cookie']
-    except Exception as e:
-        logging.error(f"解析请求数据失败: {e}")
-        return jsonify({"status": "error", "message": "Bad Request"}), 400
-
+    if auth_token != g.SECRET_TOKEN:
+        abort(403)
+    
+    new_cookie = request.get_json().get('cookie')
     if not new_cookie:
-        logging.warning("接收到的cookie为空。")
         return jsonify({"status": "error", "message": "Cookie is empty"}), 400
+    
     logging.info(f"成功接收到新的Cookie: ...{new_cookie[-20:]}")
     try:
-        # 读取现有的配置，以保留其他设置（如booking_params）
-        if os.path.exists(CONFIG_FILE_PATH):
-            with open(CONFIG_FILE_PATH, 'r') as f:
+        if os.path.exists(BOOKING_CONFIG_PATH):
+            with open(BOOKING_CONFIG_PATH, 'r') as f:
                 config_data = json.load(f)
         else:
             config_data = {}
         config_data['cookie'] = new_cookie
-
-        # 写回配置文件
-        with open(CONFIG_FILE_PATH, 'w') as f:
+        with open(BOOKING_CONFIG_PATH, 'w') as f:
             json.dump(config_data, f, indent=2)
-        
-        logging.info(f"'{CONFIG_FILE_PATH}' 中的Cookie已成功更新！")
+        logging.info(f"'{BOOKING_CONFIG_PATH}' 中的Cookie已成功更新！")
         return jsonify({"status": "success", "message": "Cookie updated successfully"}), 200
-
     except Exception as e:
-        logging.error(f"更新配置文件时发生错误: {e}")
+        logging.error(f"更新抢票配置文件时发生错误: {e}")
         return jsonify({"status": "error", "message": "Internal Server Error"}), 500
-
-# --- 新增的日志查看路由 ---
 
 @app.route('/logs', methods=['GET'])
 def list_logs():
-    """日志文件列表页面。"""
     token = request.args.get('token')
-    if token != SECRET_TOKEN:
-        abort(403) # 访问被禁止
+    if token != g.SECRET_TOKEN:
+        abort(403)
     
     html = "<h1>可选日志文件</h1><ul>"
-    for filename in ALLOWED_LOG_FILES:
-        # 构造每个日志文件的链接，并附上token
+    for filename in g.ALLOWED_LOG_FILES:
         html += f'<li><a href="/logs/view/{filename}?token={token}">{filename}</a></li>'
     html += "</ul>"
     return html
 
 @app.route('/logs/view/<filename>', methods=['GET'])
 def view_log(filename):
-    """渲染日志查看器HTML页面。"""
     token = request.args.get('token')
-    if token != SECRET_TOKEN:
+    if token != g.SECRET_TOKEN:
         abort(403)
     
-    # 安全检查：确保请求的文件名在白名单内，防止路径遍历攻击
-    if filename not in ALLOWED_LOG_FILES:
-        abort(404) # 文件未找到
+    if filename not in g.ALLOWED_LOG_FILES:
+        abort(404)
     
     log_content = read_log_file(filename)
     return render_template('log_viewer.html', log_content=log_content, filename=filename, token=token)
 
 @app.route('/api/logs/<filename>', methods=['GET'])
 def get_log_api(filename):
-    """为前端JS提供纯文本日志内容的API。"""
     token = request.args.get('token')
-    if token != SECRET_TOKEN:
+    if token != g.SECRET_TOKEN:
         abort(403)
     
-    if filename not in ALLOWED_LOG_FILES:
+    if filename not in g.ALLOWED_LOG_FILES:
         abort(404)
         
     log_content = read_log_file(filename)
-    # 返回纯文本内容
     return Response(log_content, mimetype='text/plain')
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    # 从配置管理器启动服务
+    host = config_manager.get("SERVER_SETTINGS", "HOST", "0.0.0.0")
+    port = config_manager.get("SERVER_SETTINGS", "PORT", 5000)
+    app.run(host=host, port=port, debug=False)
