@@ -104,6 +104,18 @@ class GymBooker:
         
         return False, "retry"
 
+    def _book_single_field_brutal(self, field_no, field_name):
+        checkdata_str = urllib.parse.quote(json.dumps(self._create_checkdata(field_no, field_name)))
+        url = f"{self.BASE_URL}?checkdata={checkdata_str}&dateadd=2&VenueNo=01"
+        
+        try:
+            response = self.session.get(url, timeout=5)
+            self.logger.info(f"尝试 {field_name} - 状态码: {response.status_code}")
+        except (requests.RequestException, json.JSONDecodeError) as e:
+            self.logger.error(f"请求或解析失败 for {field_name}: {e}")
+            return False, "request_error"
+        return False, "retry"
+
     def daily_booking_task(self, start_time: datetime = None):
         """
         每日执行的抢票任务单元。
@@ -140,13 +152,37 @@ class GymBooker:
                     self.logger.error("Cookie已失效，任务终止")
                     return
                 if status == "skip": skipped_fields.add(field_no)
-                elif status == "slow": time.sleep(3)
-                else: time.sleep(0.5)
+                elif status == "slow": time.sleep(0.1)
+                else: time.sleep(0.1)
+        self.logger.info("抢票时间窗口已过，今日任务结束。")
+
+    def daily_booking_task_brutal(self, start_time: datetime = None):
+
+        self._reload_params()
+
+        self.logger.info("="*50)
+
+        # 如果没有提供测试时间，就使用当前真实时间
+        now = start_time or datetime.now()
+
+        self.logger.info(f"触发每日抢票任务(brutal) @ {now.strftime('%Y-%m-%d %H:%M:%S')}")
+        self._refresh_state()
+
+        # 基于 now 来计算结束时间
+        booking_end_time = now + timedelta(minutes=self.window_minutes)
+        skipped_fields = set()
+
+        while datetime.now() < booking_end_time:
+            for i in range(1, self.total_fields + 1):
+                field_no = f"JSP{i:03d}"
+                if field_no in skipped_fields: continue
+                field_name = get_field_info(field_no)
+                self._book_single_field(field_no, field_name)
         self.logger.info("抢票时间窗口已过，今日任务结束。")
 
     def run(self):
         self.logger.info(f"调度器已启动。任务将在每天 {self.schedule_time} 执行。")
-        schedule.every().day.at(self.schedule_time).do(self.daily_booking_task)
+        schedule.every().day.at(self.schedule_time).do(self.daily_booking_task_brutal)
         while True:
             schedule.run_pending()
             time.sleep(1)
